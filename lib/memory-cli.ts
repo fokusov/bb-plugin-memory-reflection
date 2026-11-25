@@ -83,6 +83,28 @@ function invoke(
   });
 }
 
+function normalizeKey(value: string): string {
+  return value.trim().toLocaleLowerCase("en-US").replace(/[\s._-]+/gu, " ").trim();
+}
+
+/**
+ * BB memory search matches any word of a query, so its raw hits say nothing about
+ * duplication. A hit counts only when the stored name or the stored summary is the
+ * same text as the candidate's.
+ */
+export function isDuplicateMemory(
+  candidate: Pick<CandidateRow, "name" | "summary">,
+  memories: readonly { name?: string; summary?: string }[],
+): boolean {
+  const name = normalizeKey(candidate.name);
+  const summary = normalizeKey(candidate.summary);
+  return memories.some((memory) => {
+    const storedName = normalizeKey(memory.name ?? "");
+    const storedSummary = normalizeKey(memory.summary ?? "");
+    return (name !== "" && storedName === name) || (summary !== "" && storedSummary === summary);
+  });
+}
+
 export async function addMemoryCandidate(
   candidate: CandidateRow,
   scope: "project" | "global",
@@ -90,7 +112,7 @@ export async function addMemoryCandidate(
   context: MemoryCommandContext,
   signal?: AbortSignal,
 ): Promise<{ memoryId: string | null }> {
-  const query = `${candidate.name.replace(/[._-]+/gu, " ")} ${candidate.summary}`.trim();
+  const query = candidate.name.replace(/[._-]+/gu, " ").trim();
   const search = await invoke(
     ["memory", "search", query, "--scope", scope, "--limit", "20", "--json"],
     cwd,
@@ -100,7 +122,7 @@ export async function addMemoryCandidate(
   if (!Array.isArray(search.memories)) {
     throw new MemoryCliError("Memory search response has no memories list", "invalid_search_response");
   }
-  if (search.memories.length > 0) {
+  if (isDuplicateMemory(candidate, search.memories)) {
     throw new MemoryCliError("Похожа́я запись уже есть в Memory; проверь её через bb memory search перед созданием новой.", "possible_duplicate");
   }
 

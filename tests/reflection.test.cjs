@@ -187,6 +187,112 @@ test("long PEM evidence is redacted before truncation, including an unmatched be
   assert.ok(selected.text.length <= 4_000);
 });
 
+test("a loose search hit does not block a new memory; a real duplicate does", async () => {
+  const memoryCli = loadTypeScript("lib/memory-cli.ts");
+  const candidate = {
+    name: "agent-history-request-limit",
+    summary: "В Session Overview запрос истории вкладки «Агенты» должен учитывать лимит BB: не более 100 событий.",
+    details: "details",
+    reason: "reason",
+    kind: "episode",
+    tags_json: JSON.stringify(["session-overview"]),
+    importance: 80,
+  };
+  assert.equal(memoryCli.isDuplicateMemory(candidate, []), false);
+  assert.equal(memoryCli.isDuplicateMemory(candidate, [{
+    name: "preserve-openspec-profile-settings",
+    summary: "При обновлении плагина сохраняйте настройки и привязки тредов.",
+  }]), false);
+  assert.equal(memoryCli.isDuplicateMemory(candidate, [{ name: "Agent.History_Request Limit" }]), true);
+  assert.equal(memoryCli.isDuplicateMemory(candidate, [{
+    name: "other-name",
+    summary: "в session overview запрос истории вкладки «Агенты» должен учитывать лимит bb: не более 100 событий.",
+  }]), true);
+});
+
+test("lessons cite any snapshot message, but only a user request grants auto-save", () => {
+  const { filterSupportedLessons } = loadTypeScript("lib/reflection.ts");
+  const messages = [
+    { id: "thr:user-seed:1", role: "user", text: "Implement the change; read the artifacts first." },
+    { id: "thr:assistant:2", role: "assistant", text: "Fixed the cursor read; the job now produces proposals." },
+    { id: "thr:user-seed:5", role: "user", text: "Запомни это: пагинация требует курсора BB." },
+  ];
+  const lesson = (name, evidenceRefs, explicitRemember) => ({
+    kind: "procedure",
+    name,
+    summary: `Урок ${name}`,
+    details: `Детали ${name}`,
+    reason: `Причина ${name}`,
+    tags: ["pilot"],
+    importance: 60,
+    confidence: 0.95,
+    evidence_refs: evidenceRefs,
+    explicit_remember: explicitRemember,
+  });
+
+  const supported = filterSupportedLessons([
+    lesson("assistant-evidence", ["thr:assistant:2"], false),
+    lesson("explicit-request", ["thr:user-seed:5"], true),
+    lesson("model-claims-explicit", ["thr:assistant:2"], true),
+    lesson("unknown-ref", ["thr:missing:9"], false),
+    lesson("generic-kickoff", ["thr:user-seed:1"], true),
+  ], messages);
+
+  assert.deepEqual(supported.map(({ lesson }) => lesson.name), [
+    "assistant-evidence", "explicit-request", "model-claims-explicit", "generic-kickoff",
+  ]);
+  assert.deepEqual(supported.map(({ explicitRemember }) => explicitRemember), [false, true, false, false]);
+});
+
+test("saving a candidate writes the source thread through the BB CLI", async () => {
+  const calls = [];
+  const originalLoad = Module._load;
+  let memoryCli;
+  Module._load = function (request, parent, isMain) {
+    if (request === "node:child_process") {
+      return {
+        execFile(executable, args, options, callback) {
+          calls.push({ executable, args, cwd: options.cwd, env: options.env });
+          const response = calls.length === 1
+            ? { ok: true, memories: [{ name: "unrelated", summary: "unrelated" }] }
+            : { ok: true, memory: { id: "mem_synthetic", sourceThreadId: "thread-1" } };
+          callback(null, JSON.stringify(response), "");
+          return { kill() {} };
+        },
+      };
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+
+  try {
+    memoryCli = loadTypeScript("lib/memory-cli.ts");
+    const candidate = {
+      name: "agent-history-request-limit",
+      summary: "Лимит истории — 100 событий.",
+      details: "details",
+      reason: "reason",
+      kind: "episode",
+      tags_json: JSON.stringify(["session-overview", "auto-reflection"]),
+      importance: 80,
+    };
+    const result = await memoryCli.addMemoryCandidate(candidate, "project", "C:/pilot", {
+      projectId: "proj_pilot",
+      threadId: "thread-1",
+    });
+    assert.deepEqual(result, { memoryId: "mem_synthetic" });
+    assert.equal(calls.length, 2);
+    assert.match(calls[0].args.join(" "), /memory search agent history request limit --scope project --limit 20 --json$/u);
+    assert.match(calls[1].args.join(" "), /memory add --scope project --name agent-history-request-limit/u);
+    assert.equal(calls[0].env.BB_PROJECT_ID, "proj_pilot");
+    assert.equal(calls[0].env.BB_THREAD_ID, "thread-1");
+    const tagValues = calls[1].args.reduce((tags, value, index, args) =>
+      value === "--tag" ? [...tags, args[index + 1]] : tags, []);
+    assert.deepEqual(tagValues, ["auto-reflection", "session-overview"]);
+  } finally {
+    Module._load = originalLoad;
+  }
+});
+
 test("a repeated lesson in a later snapshot of the same thread is deduplicated", () => {
   const reflection = loadTypeScript("lib/reflection.ts");
   const originalLoad = Module._load;

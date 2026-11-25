@@ -4,9 +4,8 @@ import { z } from "zod";
 import { addMemoryCandidate, MemoryCliError } from "./lib/memory-cli.js";
 import {
   buildReflectionPrompt,
-  candidateIsSensitive,
   choosePermissionMode,
-  hasExplicitMemoryRequest,
+  filterSupportedLessons,
   parseReflectionResult,
   readReflectionMessages,
   type ReflectionMessage,
@@ -22,7 +21,7 @@ import { rpcContract } from "./rpc.js";
 
 const CHANGED = "memory-reflection-changed";
 const WORKER_TITLE = "Memory Reflection · temporary worker";
-const MAX_WORKER_WAIT_MS = 120_000;
+const MAX_WORKER_WAIT_MS = 300_000;
 type CandidateSaveStatus = Extract<CandidateStatus, "saved" | "conflict" | "blocked" | "pending_review">;
 
 function delay(ms: number, signal: AbortSignal): Promise<void> {
@@ -228,20 +227,21 @@ async function reflectionPermissionMode(
   bb: BbPluginApi,
   providerId: string,
   signal: AbortSignal,
-): Promise<ReflectionPermissionMode> {
-  let supported: readonly string[] = [];
+): Promise<ReflectionPermissionMode | undefined> {
+  let supported: readonly string[] | null = null;
   try {
     const providers = await bb.sdk.providers.list({ signal });
     const provider = providers.find((item) => item.id === providerId);
-    supported = provider?.capabilities.permissionModes ?? [];
+    supported = provider ? provider.capabilities.permissionModes : null;
   } catch {
     // An unreadable catalog must not block generation; the preferred mode is the least permissive one.
-    return "auto";
+    supported = null;
   }
+  // Null means the catalog did not describe this provider: keep the mode BB would choose on its own.
+  if (supported === null) return undefined;
+  // An empty list means the provider has no permission modes at all, so the field must stay unset.
   const mode = choosePermissionMode(supported);
-  if (!mode) {
-    throw new Error(`Провайдер ${providerId} не объявил поддерживаемые режимы разрешений для временного обработчика`);
-  }
+  if (!mode) return undefined;
   if (mode === "full") {
     bb.log.warn(`Провайдер ${providerId} поддерживает только режим full; временный обработчик рефлексии запущен с полными разрешениями`);
   }
@@ -255,11 +255,12 @@ async function generateReflection(job: JobRow, messages: ReflectionMessage[], si
     ]);
     const personalProject = projects.find((project) => project.kind === "personal");
     if (!personalProject) throw new Error("Не найден личный проект BB для временного потока рефлексии");
+    const permissionMode = await reflectionPermissionMode(bb, sourceThread.providerId, signal);
     const worker = await bb.sdk.threads.spawn({
       projectId: personalProject.id,
       environment: { type: "host", workspace: { type: "personal" } },
       providerId: sourceThread.providerId,
-      permissionMode: await reflectionPermissionMode(bb, sourceThread.providerId, signal),
+      ...(permissionMode ? { permissionMode } : {}),
       visibility: "hidden",
       title: WORKER_TITLE,
       pluginMetadata: { memoryReflectionWorker: true, jobId: job.id },
@@ -344,17 +345,7 @@ async function generateReflection(job: JobRow, messages: ReflectionMessage[], si
 
     const output = await generateReflection(job, messages, signal);
     const result = parseReflectionResult(output);
-    const userIds = new Set(userMessages.map((message) => message.id));
-    const userMessagesById = new Map(userMessages.map((message) => [message.id, message]));
-    const safeLessons = result.lessons.flatMap((lesson) => {
-      if (!lesson.evidence_refs.every((id) => userIds.has(id))) return [];
-      if (candidateIsSensitive(lesson)) return [];
-      const explicitEvidence = lesson.evidence_refs.some((id) => {
-        const evidence = userMessagesById.get(id);
-        return evidence !== undefined && hasExplicitMemoryRequest(evidence.text);
-      });
-      return [{ lesson, explicitRemember: lesson.explicit_remember && explicitEvidence }];
-    });
+    const safeLessons = filterSupportedLessons(result.lessons, messages);
     const current = store.getJob(job.id);
     if (!current?.lease_token) throw new Error("job_lease_lost");
     store.finishCandidates(current, current.lease_token, safeLessons);

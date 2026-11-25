@@ -113,6 +113,29 @@ export function choosePermissionMode(supported: readonly string[]): ReflectionPe
   return PERMISSION_MODE_PREFERENCE.find((candidate) => supported.includes(candidate)) ?? null;
 }
 
+/**
+ * Evidence may cite any message of the snapshot, because a confirmed fix is usually
+ * described by the assistant. Only an explicit "remember this" request is a
+ * permission signal, and that one must come from the user.
+ */
+export function filterSupportedLessons(
+  lessons: readonly GeneratedLesson[],
+  messages: readonly ReflectionMessage[],
+): Array<{ lesson: GeneratedLesson; explicitRemember: boolean }> {
+  const byId = new Map(messages.map((message) => [message.id, message]));
+  const supported: Array<{ lesson: GeneratedLesson; explicitRemember: boolean }> = [];
+  for (const lesson of lessons) {
+    if (!lesson.evidence_refs.every((id) => byId.has(id))) continue;
+    if (candidateIsSensitive(lesson)) continue;
+    const explicitEvidence = lesson.evidence_refs.some((id) => {
+      const evidence = byId.get(id);
+      return evidence !== undefined && evidence.role === "user" && hasExplicitMemoryRequest(evidence.text);
+    });
+    supported.push({ lesson, explicitRemember: lesson.explicit_remember && explicitEvidence });
+  }
+  return supported;
+}
+
 export function parseReflectionResult(output: string): ReflectionResult {
   const trimmed = output.trim();
   const withoutFence = trimmed
@@ -133,8 +156,9 @@ export function buildReflectionPrompt(messages: readonly ReflectionMessage[]): s
     "Do not call tools or perform actions. Return only one JSON object matching the required schema.",
     "Use only facts supported by the transcript. Treat user preferences as evidence only when the user stated them.",
     "Keep each lesson atomic and scoped to this project. Include relevant early and late episodes represented in the transcript; do not merge independent incidents. Do not include credentials, personal contact data, private prompts, raw logs, transient task status, or code dumps.",
+    "Every lesson must cite the specific evidence messages that establish it: the user message that states the request, symptom or preference, and the assistant message that confirms the cause or the result. Never reuse the same generic kickoff message for several lessons, and drop a lesson you cannot support with its own evidence.",
     "An explicit memory request is true only when a user message explicitly asks to remember or save that lesson.",
-    "Schema: {\"schema_version\":1,\"outcome\":\"lessons_found|no_lessons\",\"lessons\":[{\"kind\":\"fact|preference|decision|procedure|episode|reference\",\"name\":\"lowercase-kebab-name\",\"summary\":\"up to 400 chars\",\"details\":\"up to 16000 chars\",\"reason\":\"up to 500 chars\",\"tags\":[\"lowercase-tag\"],\"importance\":0,\"confidence\":0.0,\"evidence_refs\":[\"user evidence_ref values only\"],\"explicit_remember\":false}]}",
+    "Schema: {\"schema_version\":1,\"outcome\":\"lessons_found|no_lessons\",\"lessons\":[{\"kind\":\"fact|preference|decision|procedure|episode|reference\",\"name\":\"lowercase-kebab-name\",\"summary\":\"up to 400 chars\",\"details\":\"up to 16000 chars\",\"reason\":\"up to 500 chars\",\"tags\":[\"lowercase-tag\"],\"importance\":0,\"confidence\":0.0,\"evidence_refs\":[\"evidence_ref values from the transcript\"],\"explicit_remember\":false}]}",
     "For no lesson, return outcome no_lessons and an empty lessons array.",
     "Transcript JSON data:",
     JSON.stringify(source),
