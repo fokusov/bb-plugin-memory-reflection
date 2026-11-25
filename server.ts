@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { addMemoryCandidate, MemoryCliError } from "./lib/memory-cli.js";
+import { addMemoryCandidate, MemoryCliError, type AddMemoryOptions } from "./lib/memory-cli.js";
 import {
   buildReflectionPrompt,
   choosePermissionMode,
@@ -305,6 +305,7 @@ async function generateReflection(job: JobRow, messages: ReflectionMessage[], si
     candidateId: string,
     scope: "project" | "global",
     signal?: AbortSignal,
+    options: AddMemoryOptions = {},
   ): Promise<{ status: CandidateSaveStatus; message: string }> {
     const context = store.candidateContext(candidateId);
     if (!context) throw new Error("Предложение не найдено");
@@ -316,7 +317,7 @@ async function generateReflection(job: JobRow, messages: ReflectionMessage[], si
         projectId: context.project_id,
         threadId: context.source_thread_id,
         serverUrl: bb.server.loopbackBaseUrl,
-      }, signal);
+      }, signal, options);
       store.markCandidate(candidateId, "saved", `Сохранено в ${scope === "project" ? "память проекта" : "глобальную память"}`, result.memoryId);
       publishChanged();
       return { status: "saved" as const, message: "Урок записан в BB Memory" };
@@ -374,7 +375,7 @@ async function generateReflection(job: JobRow, messages: ReflectionMessage[], si
       const candidates = store.listOverview().candidates.filter((candidate) => candidate.job_id === job.id);
       for (const candidate of selectCandidatesToAutoSave(candidates, policy)) {
         if (signal.aborted) break;
-        await saveCandidate(candidate.id, "project", signal);
+        await saveCandidate(candidate.id, "project", signal, { requireEmptySearch: true });
       }
     }
     publishChanged();

@@ -323,6 +323,53 @@ test("auto-save follows the confidence threshold and keeps the explicit rule apa
   );
 });
 
+test("an automatic write stops on any similar memory, a manual one only on an exact duplicate", async () => {
+  const calls = [];
+  const originalLoad = Module._load;
+  let memoryCli;
+  Module._load = function (request, parent, isMain) {
+    if (request === "node:child_process") {
+      return {
+        execFile(executable, args, options, callback) {
+          calls.push({ args, options });
+          const isSearch = args.includes("search");
+          callback(null, JSON.stringify(isSearch
+            ? { ok: true, memories: [{ name: "other-name", summary: "Похожий по смыслу урок про лимиты." }] }
+            : { ok: true, memory: { id: "mem_synthetic", sourceThreadId: "thread-1" } }), "");
+          return { kill() {} };
+        },
+      };
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+
+  try {
+    memoryCli = loadTypeScript("lib/memory-cli.ts");
+    const candidate = {
+      name: "agent-history-request-limit",
+      summary: "Лимит истории — 100 событий.",
+      details: "details",
+      reason: "reason",
+      kind: "episode",
+      tags_json: "[]",
+      importance: 80,
+    };
+    const context = { projectId: "proj_pilot", threadId: "thread-1", serverUrl: "http://127.0.0.1:49161" };
+
+    await assert.rejects(
+      memoryCli.addMemoryCandidate(candidate, "project", "C:/pilot", context, undefined, { requireEmptySearch: true }),
+      /Похожа́я запись уже есть/u,
+    );
+    assert.equal(calls.length, 1);
+
+    const manual = await memoryCli.addMemoryCandidate(candidate, "project", "C:/pilot", context);
+    assert.deepEqual(manual, { memoryId: "mem_synthetic" });
+    assert.equal(calls.length, 3);
+  } finally {
+    Module._load = originalLoad;
+  }
+});
+
 test("a repeated lesson in a later snapshot of the same thread is deduplicated", () => {
   const reflection = loadTypeScript("lib/reflection.ts");
   const originalLoad = Module._load;

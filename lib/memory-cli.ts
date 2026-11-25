@@ -17,6 +17,15 @@ export interface MemoryCommandContext {
   serverUrl: string;
 }
 
+export interface AddMemoryOptions {
+  /**
+   * Automatic writes cannot show a reviewer a near-duplicate, so any search hit
+   * blocks the record. Manual approvals keep the exact-match gate and leave the
+   * decision to the user.
+   */
+  requireEmptySearch?: boolean;
+}
+
 export class MemoryCliError extends Error {
   constructor(message: string, readonly code = "memory_cli_error") {
     super(message);
@@ -116,6 +125,7 @@ export async function addMemoryCandidate(
   cwd: string,
   context: MemoryCommandContext,
   signal?: AbortSignal,
+  options: AddMemoryOptions = {},
 ): Promise<{ memoryId: string | null }> {
   const query = candidate.name.replace(/[._-]+/gu, " ").trim();
   const search = await invoke(
@@ -127,7 +137,8 @@ export async function addMemoryCandidate(
   if (!Array.isArray(search.memories)) {
     throw new MemoryCliError("Memory search response has no memories list", "invalid_search_response");
   }
-  if (isDuplicateMemory(candidate, search.memories)) {
+  if (isDuplicateMemory(candidate, search.memories)
+    || (options.requireEmptySearch === true && search.memories.length > 0)) {
     throw new MemoryCliError("Похожа́я запись уже есть в Memory; проверь её через bb memory search перед созданием новой.", "possible_duplicate");
   }
 
