@@ -3,6 +3,8 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
 export const MAX_LESSONS_PER_JOB = 12;
+export const PERMISSION_MODE_PREFERENCE = ["auto", "accept-edits", "full"] as const;
+export type ReflectionPermissionMode = (typeof PERMISSION_MODE_PREFERENCE)[number];
 export const MEMORY_KINDS = ["fact", "preference", "decision", "procedure", "episode", "reference"] as const;
 const SOURCE_SEGMENTS = "80";
 const MAX_SOURCE_PAGES = 128;
@@ -105,6 +107,10 @@ export function selectRepresentativeMessages(
     if (safeText.trim()) selected.push({ id: message.id, role: message.role, text: safeText.slice(0, perMessage) });
   }
   return selected;
+}
+
+export function choosePermissionMode(supported: readonly string[]): ReflectionPermissionMode | null {
+  return PERMISSION_MODE_PREFERENCE.find((candidate) => supported.includes(candidate)) ?? null;
 }
 
 export function parseReflectionResult(output: string): ReflectionResult {

@@ -5,6 +5,7 @@ import { addMemoryCandidate, MemoryCliError } from "./lib/memory-cli.js";
 import {
   buildReflectionPrompt,
   candidateIsSensitive,
+  choosePermissionMode,
   hasExplicitMemoryRequest,
   parseReflectionResult,
   readReflectionMessages,
@@ -220,7 +221,34 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
-  async function generateReflection(job: JobRow, messages: ReflectionMessage[], signal: AbortSignal): Promise<string> {
+  const PERMISSION_MODE_PREFERENCE = ["auto", "accept-edits", "full"] as const;
+type ReflectionPermissionMode = (typeof PERMISSION_MODE_PREFERENCE)[number];
+
+async function reflectionPermissionMode(
+  bb: BbPluginApi,
+  providerId: string,
+  signal: AbortSignal,
+): Promise<ReflectionPermissionMode> {
+  let supported: readonly string[] = [];
+  try {
+    const providers = await bb.sdk.providers.list({ signal });
+    const provider = providers.find((item) => item.id === providerId);
+    supported = provider?.capabilities.permissionModes ?? [];
+  } catch {
+    // An unreadable catalog must not block generation; the preferred mode is the least permissive one.
+    return "auto";
+  }
+  const mode = choosePermissionMode(supported);
+  if (!mode) {
+    throw new Error(`Провайдер ${providerId} не объявил поддерживаемые режимы разрешений для временного обработчика`);
+  }
+  if (mode === "full") {
+    bb.log.warn(`Провайдер ${providerId} поддерживает только режим full; временный обработчик рефлексии запущен с полными разрешениями`);
+  }
+  return mode;
+}
+
+async function generateReflection(job: JobRow, messages: ReflectionMessage[], signal: AbortSignal): Promise<string> {
     const [sourceThread, projects] = await Promise.all([
       bb.sdk.threads.get({ threadId: job.source_thread_id, signal }),
       bb.sdk.projects.list({ includePersonal: true, signal }),
@@ -231,7 +259,7 @@ export default async function plugin(bb: BbPluginApi) {
       projectId: personalProject.id,
       environment: { type: "host", workspace: { type: "personal" } },
       providerId: sourceThread.providerId,
-      permissionMode: "auto",
+      permissionMode: await reflectionPermissionMode(bb, sourceThread.providerId, signal),
       visibility: "hidden",
       title: WORKER_TITLE,
       pluginMetadata: { memoryReflectionWorker: true, jobId: job.id },

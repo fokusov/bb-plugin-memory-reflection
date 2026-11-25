@@ -91,6 +91,86 @@ test("a stale timeline cursor restarts once and discards the previous page", asy
   } }, input), expired);
 });
 
+test("the temporary worker asks for the least permissive mode the provider supports", () => {
+  const { choosePermissionMode } = loadTypeScript("lib/reflection.ts");
+  assert.equal(choosePermissionMode(["full"]), "full");
+  assert.equal(choosePermissionMode(["full", "auto"]), "auto");
+  assert.equal(choosePermissionMode(["accept-edits", "full"]), "accept-edits");
+  assert.equal(choosePermissionMode([]), null);
+});
+
+test("one snapshot yields several distinct lessons and repeats collapse inside the job", () => {
+  const reflection = loadTypeScript("lib/reflection.ts");
+  const originalLoad = Module._load;
+  Module._load = function (request, parent, isMain) {
+    if (request === "./reflection.js" && parent?.filename.endsWith(`${path.sep}lib${path.sep}store.ts`)) {
+      return reflection;
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+
+  try {
+    const { ReflectionStore } = loadTypeScript("lib/store.ts");
+    const db = new Database(":memory:");
+    try {
+      const store = new ReflectionStore(db, (database, statements) => {
+        statements.forEach((statement) => database.exec(statement));
+      });
+      const lesson = (name, evidence) => ({
+        kind: "procedure",
+        name,
+        summary: `Урок ${name}`,
+        details: `Детали ${name}`,
+        reason: `Причина ${name}`,
+        tags: ["pilot"],
+        importance: 60,
+        confidence: 0.9,
+        evidence_refs: [evidence],
+        explicit_remember: false,
+      });
+
+      const job = store.enqueue({
+        sourceThreadId: "long-thread",
+        projectId: "synthetic-project",
+        sourceSeq: 400,
+        trigger: "manual",
+      }).job;
+      const claimed = store.claimNext();
+      store.finishCandidates(claimed, claimed.lease_token, [
+        { lesson: lesson("early-fix", "user-message-1"), explicitRemember: false },
+        { lesson: lesson("late-fix", "user-message-9"), explicitRemember: false },
+        { lesson: lesson("early-fix", "user-message-1"), explicitRemember: false },
+      ]);
+
+      const rows = db.prepare("SELECT name, evidence_refs_json FROM reflection_candidates WHERE job_id = ? ORDER BY name")
+        .all(job.id);
+      assert.deepEqual(rows.map((row) => row.name), ["early-fix", "late-fix"]);
+      assert.deepEqual(JSON.parse(rows[0].evidence_refs_json), ["user-message-1"]);
+      assert.deepEqual(JSON.parse(rows[1].evidence_refs_json), ["user-message-9"]);
+      assert.equal(store.getJob(job.id).status, "review_pending");
+    } finally {
+      db.close();
+    }
+  } finally {
+    Module._load = originalLoad;
+  }
+});
+
+test("an incomplete timeline snapshot fails with an explicit coverage error", async () => {
+  const { readReflectionMessages } = loadTypeScript("lib/reflection.ts");
+  const signal = new AbortController().signal;
+  let pages = 0;
+  await assert.rejects(readReflectionMessages({ timeline: async () => {
+    pages += 1;
+    return {
+      rows: [{ kind: "conversation", role: "user", id: `message-${pages}`, text: "x", sourceSeqStart: 1000 + pages, sourceSeqEnd: 1000 + pages }],
+      timelinePage: { olderCursor: { anchorSeq: 9_000, anchorId: `cursor-${pages}` } },
+    };
+  } }, { threadId: "thread", sourceSeq: 5000, maxChars: 2_000, signal }),
+  /page limit reached before the reflection snapshot/u);
+  assert.equal(pages, 128);
+});
+
 test("long PEM evidence is redacted before truncation, including an unmatched begin marker", () => {
   const { selectRepresentativeMessages } = loadTypeScript("lib/reflection.ts");
   const message = {
