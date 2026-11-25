@@ -8,6 +8,8 @@ import {
   filterSupportedLessons,
   parseReflectionResult,
   readReflectionMessages,
+  selectCandidatesToAutoSave,
+  type AutoSavePolicy,
   type ReflectionMessage,
 } from "./lib/reflection.js";
 import {
@@ -113,6 +115,17 @@ export default async function plugin(bb: BbPluginApi) {
       type: "boolean",
       label: "Автоматически сохранять только явные просьбы «запомни»",
       default: true,
+    },
+    autoSaveHighConfidence: {
+      type: "boolean",
+      label: "Сохранять в память проекта без ревью уроки с высоким доверием",
+      default: false,
+    },
+    autoSaveConfidenceThreshold: {
+      type: "number",
+      label: "Порог доверия для автосохранения, %",
+      experimental_schema: z.number().int().min(50).max(100),
+      default: 90,
     },
     maxSourceChars: {
       type: "number",
@@ -351,11 +364,16 @@ async function generateReflection(job: JobRow, messages: ReflectionMessage[], si
     if (!current?.lease_token) throw new Error("job_lease_lost");
     store.finishCandidates(current, current.lease_token, safeLessons);
 
-    if (config.enabled && config.autoSaveExplicit) {
+    const policy: AutoSavePolicy | null = config.autoSaveHighConfidence
+      ? { minConfidence: config.autoSaveConfidenceThreshold / 100, onlyExplicit: false }
+      : config.enabled && config.autoSaveExplicit
+        ? { minConfidence: 0.9, onlyExplicit: true }
+        : null;
+    if (policy) {
+      // Project scope only: a global record still needs an explicit scope choice from the user.
       const candidates = store.listOverview().candidates.filter((candidate) => candidate.job_id === job.id);
-      for (const candidate of candidates) {
+      for (const candidate of selectCandidatesToAutoSave(candidates, policy)) {
         if (signal.aborted) break;
-        if (!candidate.explicit_remember || candidate.status !== "pending_review" || candidate.confidence < 0.9) continue;
         await saveCandidate(candidate.id, "project", signal);
       }
     }
@@ -380,6 +398,8 @@ async function generateReflection(job: JobRow, messages: ReflectionMessage[], si
       return {
         enabled: config.enabled,
         autoSaveExplicit: config.autoSaveExplicit,
+        autoSaveHighConfidence: config.autoSaveHighConfidence,
+        autoSaveConfidenceThreshold: config.autoSaveConfidenceThreshold,
         jobs: overview.jobs.map(jobView),
         candidates: overview.candidates.map(candidateView),
       };

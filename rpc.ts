@@ -50,6 +50,8 @@ export const rpcContract = defineRpcContract({
     output: z.object({
       enabled: z.boolean(),
       autoSaveExplicit: z.boolean(),
+      autoSaveHighConfidence: z.boolean(),
+      autoSaveConfidenceThreshold: z.number(),
       jobs: z.array(jobSchema),
       candidates: z.array(candidateSchema),
     }),

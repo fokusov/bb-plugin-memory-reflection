@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 interface Overview {
   enabled: boolean;
   autoSaveExplicit: boolean;
+  autoSaveHighConfidence: boolean;
+  autoSaveConfidenceThreshold: number;
   jobs: ReflectionJob[];
   candidates: ReflectionCandidate[];
 }
@@ -88,7 +90,11 @@ function ReflectionPage() {
           </div>
         </header>
 
-        {overview?.autoSaveExplicit ? (
+        {overview?.autoSaveHighConfidence ? (
+          <p className="mt-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            Уроки с доверием от {overview.autoSaveConfidenceThreshold}% сохраняются в память проекта без review. В глобальную память автосохранение не пишет.
+          </p>
+        ) : overview?.autoSaveExplicit ? (
           <p className="mt-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
             В настройках включено авто-сохранение только для уроков с явной просьбой «запомни» и подтверждёнными ссылками на сообщения.
           </p>

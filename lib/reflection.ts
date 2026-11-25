@@ -136,6 +136,26 @@ export function filterSupportedLessons(
   return supported;
 }
 
+/**
+ * Which review candidates a finished job may write without a manual approval.
+ * Confidence mode follows the user's threshold; the explicit mode keeps the original
+ * narrow rule that only a stated "remember this" request may be written.
+ */
+export interface AutoSavePolicy {
+  minConfidence: number;
+  onlyExplicit: boolean;
+}
+
+export function selectCandidatesToAutoSave<T extends {
+  status: string;
+  confidence: number;
+  explicit_remember: number;
+}>(candidates: readonly T[], policy: AutoSavePolicy): T[] {
+  return candidates.filter((candidate) => candidate.status === "pending_review"
+    && (!policy.onlyExplicit || candidate.explicit_remember === 1)
+    && candidate.confidence >= policy.minConfidence);
+}
+
 export function parseReflectionResult(output: string): ReflectionResult {
   const trimmed = output.trim();
   const withoutFence = trimmed

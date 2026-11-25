@@ -296,6 +296,33 @@ test("saving a candidate writes the source thread through the BB CLI", async () 
   }
 });
 
+test("auto-save follows the confidence threshold and keeps the explicit rule apart", () => {
+  const { selectCandidatesToAutoSave } = loadTypeScript("lib/reflection.ts");
+  const candidate = (name, confidence, explicitRemember, status = "pending_review") => ({
+    name, confidence, explicit_remember: explicitRemember ? 1 : 0, status,
+  });
+  const rows = [
+    candidate("high-confidence", 0.95, false),
+    candidate("exactly-nine-tenths", 0.9, false),
+    candidate("low-confidence", 0.62, false),
+    candidate("explicit-but-low", 0.5, true),
+    candidate("already-saved", 0.99, false, "saved"),
+  ];
+
+  assert.deepEqual(
+    selectCandidatesToAutoSave(rows, { minConfidence: 0.9, onlyExplicit: false }).map((row) => row.name),
+    ["high-confidence", "exactly-nine-tenths"],
+  );
+  assert.deepEqual(
+    selectCandidatesToAutoSave(rows, { minConfidence: 0.9, onlyExplicit: true }).map((row) => row.name),
+    [],
+  );
+  assert.deepEqual(
+    selectCandidatesToAutoSave(rows, { minConfidence: 0, onlyExplicit: true }).map((row) => row.name),
+    ["explicit-but-low"],
+  );
+});
+
 test("a repeated lesson in a later snapshot of the same thread is deduplicated", () => {
   const reflection = loadTypeScript("lib/reflection.ts");
   const originalLoad = Module._load;
