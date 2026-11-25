@@ -278,6 +278,7 @@ test("saving a candidate writes the source thread through the BB CLI", async () 
     const result = await memoryCli.addMemoryCandidate(candidate, "project", "C:/pilot", {
       projectId: "proj_pilot",
       threadId: "thread-1",
+      serverUrl: "http://127.0.0.1:49161",
     });
     assert.deepEqual(result, { memoryId: "mem_synthetic" });
     assert.equal(calls.length, 2);
@@ -285,6 +286,8 @@ test("saving a candidate writes the source thread through the BB CLI", async () 
     assert.match(calls[1].args.join(" "), /memory add --scope project --name agent-history-request-limit/u);
     assert.equal(calls[0].env.BB_PROJECT_ID, "proj_pilot");
     assert.equal(calls[0].env.BB_THREAD_ID, "thread-1");
+    assert.equal(calls[0].env.BB_SERVER_URL, "http://127.0.0.1:49161");
+    assert.equal(calls[1].env.BB_SERVER_URL, "http://127.0.0.1:49161");
     const tagValues = calls[1].args.reduce((tags, value, index, args) =>
       value === "--tag" ? [...tags, args[index + 1]] : tags, []);
     assert.deepEqual(tagValues, ["auto-reflection", "session-overview"]);

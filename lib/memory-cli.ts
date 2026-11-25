@@ -13,6 +13,8 @@ interface MemoryCommandResponse {
 export interface MemoryCommandContext {
   projectId: string;
   threadId: string;
+  /** Loopback URL of the BB server this plugin runs on; without it the CLI would resolve another profile. */
+  serverUrl: string;
 }
 
 export class MemoryCliError extends Error {
@@ -56,6 +58,9 @@ function invoke(
       cwd,
       env: {
         ...process.env,
+        // Pin the profile: an inherited BB_SERVER_URL from the launching shell would
+        // make the CLI read and write another server's memory.
+        BB_SERVER_URL: context.serverUrl,
         BB_PROJECT_ID: context.projectId,
         BB_THREAD_ID: context.threadId,
       },

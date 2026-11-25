@@ -302,6 +302,7 @@ async function generateReflection(job: JobRow, messages: ReflectionMessage[], si
       const result = await addMemoryCandidate(candidate, scope, cwd, {
         projectId: context.project_id,
         threadId: context.source_thread_id,
+        serverUrl: bb.server.loopbackBaseUrl,
       }, signal);
       store.markCandidate(candidateId, "saved", `Сохранено в ${scope === "project" ? "память проекта" : "глобальную память"}`, result.memoryId);
       publishChanged();
